@@ -15,7 +15,21 @@ import {
   useCameraPermissions,
   useMicrophonePermissions,
 } from "expo-camera";
-import Svg, { Circle } from "react-native-svg";
+import Svg, { Circle, Path } from "react-native-svg";
+
+
+const TopTextSvg = () => (
+  <Svg width="176" height="70" viewBox="0 0 176 70">
+    <Path
+      d="M 0 0 L 24 0 L 6 70 M 42 0 L 42 70 M 66 0 L 90 0 L 90 35 L 66 35 L 66 70 L 90 70 M 112 0 L 112 70 M 136 0 L 136 70 M 152 0 L 176 0 L 152 70 L 176 70"
+      stroke="#F0F0F0"
+      strokeWidth="6"
+      fill="none"
+      strokeLinecap="square"
+      strokeLinejoin="miter"
+    />
+  </Svg>
+);
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
@@ -114,18 +128,22 @@ function RecordButton({ isRecording, onPress }) {
   );
 }
 
-function CountdownTimer() {
-  const [timeLeft, setTimeLeft] = useState(24 * 60 * 60);
+function CountdownTimer({ onComplete }) {
+  // Use a smaller TOTAL_SECONDS to test, e.g., const TOTAL_SECONDS = 60;
+  const TOTAL_SECONDS = 24 * 60 * 60;
+  // const TOTAL_SECONDS = 30;
+
+  const [timeLeft, setTimeLeft] = useState(TOTAL_SECONDS);
   const progressAnim = useRef(new Animated.Value(0)).current;
 
-  // Since user modified to 1 hour in their screenshot for testing, I'll use 24 hours as requested in text ("teh red its for 24 hours")
-  const TOTAL_SECONDS = 24 * 60 * 60;
-
   useEffect(() => {
+
+
     const interval = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
+          if (onComplete) onComplete();
           return 0;
         }
         return prev - 1;
@@ -162,9 +180,8 @@ function CountdownTimer() {
 
   const dots = Array.from({ length: 16 }).map((_, i) => {
     const angle = (i / 16) * 360;
-    // Top dot (0) remains white until the very end, or stays white.
-    // In screenshot, dot at 0 is white.
-    const isRed = angle <= currentAngle && angle > 0;
+    // Turn red if passed. The top dot (angle 0) turns red at the very end.
+    const isRed = (angle <= currentAngle && angle > 0) || currentAngle >= 360;
     return (
       <View
         key={i}
@@ -213,7 +230,7 @@ function CountdownTimer() {
 }
 
 export default function HomeScreen() {
-  const [phase, setPhase] = useState("opening"); // "opening" | "camera" | "ending" | "timer"
+  const [phase, setPhase] = useState("opening"); // "opening" | "camera" | "ending" | "timer" | "final"
   const [loops, setLoops] = useState(0);
 
   const [permission, requestPermission] = useCameraPermissions();
@@ -222,9 +239,25 @@ export default function HomeScreen() {
   const videoRef = useRef(null);
   const cameraRef = useRef(null);
   const endVideoRef = useRef(null);
+  const finalVideoRef = useRef(null);
 
   const [isRecording, setIsRecording] = useState(false);
   const [sound, setSound] = useState(null);
+  const bottomTextOpacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (phase === "opening") {
+      bottomTextOpacity.setValue(1);
+      Animated.sequence([
+        Animated.delay(3000),
+        Animated.timing(bottomTextOpacity, {
+          toValue: 0,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [phase, bottomTextOpacity]);
 
   useEffect(() => {
     let currentSound = null;
@@ -317,6 +350,21 @@ export default function HomeScreen() {
     }
   };
 
+  const handleFinalStatusUpdate = (status) => {
+    if (status.didJustFinish) {
+      setLoops((prev) => {
+        const newLoops = prev + 1;
+        if (newLoops >= 3) {
+          setPhase("opening");
+          return 0;
+        } else {
+          finalVideoRef.current?.replayAsync();
+          return newLoops;
+        }
+      });
+    }
+  };
+
   const handleRecordPress = async () => {
     if (!cameraRef.current) return;
 
@@ -343,7 +391,23 @@ export default function HomeScreen() {
   };
 
   if (phase === "timer") {
-    return <CountdownTimer />;
+    return <CountdownTimer onComplete={() => setPhase("final")} />;
+  }
+
+  if (phase === "final") {
+    return (
+      <View style={styles.screen}>
+        <Video
+          ref={finalVideoRef}
+          source={require("../assets/final.mp4")}
+          style={StyleSheet.absoluteFillObject}
+          resizeMode={ResizeMode.COVER}
+          shouldPlay
+          isLooping={false}
+          onPlaybackStatusUpdate={handleFinalStatusUpdate}
+        />
+      </View>
+    );
   }
 
   if (phase === "camera") {
@@ -410,6 +474,14 @@ export default function HomeScreen() {
         isLooping={false}
         onPlaybackStatusUpdate={handleOpeningStatusUpdate}
       />
+      <View style={styles.openingTextOverlay} pointerEvents="none">
+        <TopTextSvg />
+        <Animated.Text
+          style={[styles.bottomText, { opacity: bottomTextOpacity }]}
+        >
+          견불기
+        </Animated.Text>
+      </View>
     </View>
   );
 }
@@ -491,5 +563,23 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     letterSpacing: 2,
     fontVariant: ["tabular-nums"],
+  },
+  openingTextOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 100,
+  },
+  topText: {
+    color: "#FFF",
+    fontSize: 60,
+    fontWeight: "300",
+    letterSpacing: 4,
+  },
+  bottomText: {
+    color: "#FFF",
+    fontSize: 50,
+    fontWeight: "300",
+    letterSpacing: 4,
   },
 });
