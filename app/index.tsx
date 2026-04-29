@@ -16,8 +16,10 @@ import {
   useMicrophonePermissions,
 } from "expo-camera";
 import Svg, { Circle, Path } from "react-native-svg";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-
+const TIMER_START_KEY = "girigo_timer_start";
+const PHASE_KEY = "girigo_phase";
 const TopTextSvg = () => (
   <Svg width="176" height="70" viewBox="0 0 176 70">
     <Path
@@ -129,35 +131,50 @@ function RecordButton({ isRecording, onPress }) {
 }
 
 function CountdownTimer({ onComplete }) {
-  // Use a smaller TOTAL_SECONDS to test, e.g., const TOTAL_SECONDS = 60;
   const TOTAL_SECONDS = 24 * 60 * 60;
-  // const TOTAL_SECONDS = 30;
-
-  const [timeLeft, setTimeLeft] = useState(TOTAL_SECONDS);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const progressAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    // Load start time from storage to resume properly
+    AsyncStorage.getItem(TIMER_START_KEY).then((val) => {
+      const startMs = val ? parseInt(val) : Date.now();
+      if (!val) AsyncStorage.setItem(TIMER_START_KEY, String(startMs));
+      const elapsed = Math.floor((Date.now() - startMs) / 1000);
+      const remaining = Math.max(TOTAL_SECONDS - elapsed, 0);
+      setTimeLeft(remaining);
 
+      if (remaining <= 0) {
+        onComplete?.();
+        return;
+      }
 
-    const interval = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          if (onComplete) onComplete();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+      const progress = 1 - remaining / TOTAL_SECONDS;
+      progressAnim.setValue(progress);
 
-    Animated.timing(progressAnim, {
-      toValue: 1,
-      duration: TOTAL_SECONDS * 1000,
-      easing: Easing.linear,
-      useNativeDriver: false,
-    }).start();
+      Animated.timing(progressAnim, {
+        toValue: 1,
+        duration: remaining * 1000,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }).start();
 
-    return () => clearInterval(interval);
+      const interval = setInterval(() => {
+        setTimeLeft((prev) => {
+          if (prev === null) return null;
+          if (prev <= 1) {
+            clearInterval(interval);
+            AsyncStorage.removeItem(TIMER_START_KEY);
+            AsyncStorage.removeItem(PHASE_KEY);
+            onComplete?.();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      return () => clearInterval(interval);
+    });
   }, []);
 
   const TIMER_CIRCLE_SIZE = 300;
@@ -169,6 +186,8 @@ function CountdownTimer({ onComplete }) {
     inputRange: [0, 1],
     outputRange: [PIE_CIRCUMFERENCE, 0],
   });
+
+  if (timeLeft === null) return <View style={styles.timerScreen} />;
 
   const hours = Math.floor(timeLeft / 3600);
   const mins = Math.floor((timeLeft % 3600) / 60);
@@ -230,8 +249,19 @@ function CountdownTimer({ onComplete }) {
 }
 
 export default function HomeScreen() {
-  const [phase, setPhase] = useState("opening"); // "opening" | "camera" | "ending" | "timer" | "final"
+  const [phase, setPhase] = useState<string | null>(null); // null = loading
   const [loops, setLoops] = useState(0);
+
+  // On first mount, check persisted phase
+  useEffect(() => {
+    AsyncStorage.getItem(PHASE_KEY).then((savedPhase) => {
+      if (savedPhase === "timer") {
+        setPhase("timer");
+      } else {
+        setPhase("opening");
+      }
+    });
+  }, []);
 
   const [permission, requestPermission] = useCameraPermissions();
   const [micPermission, requestMicPermission] = useMicrophonePermissions();
@@ -244,6 +274,20 @@ export default function HomeScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [sound, setSound] = useState(null);
   const bottomTextOpacity = useRef(new Animated.Value(1)).current;
+
+  const setAndPersistPhase = (newPhase: string) => {
+    setPhase(newPhase);
+    if (newPhase === "timer") {
+      // Save timer start time only the first time
+      AsyncStorage.getItem(TIMER_START_KEY).then((existing) => {
+        if (!existing)
+          AsyncStorage.setItem(TIMER_START_KEY, String(Date.now()));
+      });
+      AsyncStorage.setItem(PHASE_KEY, "timer");
+    } else {
+      AsyncStorage.removeItem(PHASE_KEY);
+    }
+  };
 
   useEffect(() => {
     if (phase === "opening") {
@@ -320,6 +364,9 @@ export default function HomeScreen() {
     }
   }, [phase, permission, micPermission]);
 
+  // Show nothing while loading persisted phase
+  if (phase === null) return <View style={styles.screen} />;
+
   const handleOpeningStatusUpdate = (status) => {
     if (status.didJustFinish) {
       setLoops((prev) => {
@@ -340,7 +387,7 @@ export default function HomeScreen() {
       setLoops((prev) => {
         const newLoops = prev + 1;
         if (newLoops >= 2) {
-          setPhase("timer");
+          setAndPersistPhase("timer");
           return 0;
         } else {
           endVideoRef.current?.replayAsync();
